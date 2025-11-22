@@ -96,5 +96,25 @@ services:
     ports:
       - "8000:8000"    
 
+  treatments-api:
+    container_name: treatments-api
+    restart: always
+    build:
+      context: ./treatments-api # <-- Carpeta nueva
+      dockerfile: Dockerfile
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    volumes:
+      - ./treatments-api:/app
+    ports:
+      - "8003:8000" # Acceso público: localhost:8003
+    depends_on:
+      - mysql
+    environment:
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: root
+      DB_PASS: root
+      DB_NAME: CRUDG  
+
 volumes:
   mysql-data:
