@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Videollamada (API pura)</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;max-width:960px;margin:0 auto;padding:16px}
+    .card{border:1px solid #ddd;border-radius:16px;padding:16px;margin:12px 0;box-shadow:0 2px 10px rgba(0,0,0,.05)}
+    label{display:block;margin-top:8px;font-weight:600}
+    input,button,textarea{padding:10px;border-radius:8px;border:1px solid #bbb;width:100%}
+    button{cursor:pointer}
+    video{width:100%;max-height:300px;background:#000;border-radius:12px}
+    .row{display:grid;grid-template-columns:1fr 1fr; gap:16px}
+    .muted{opacity:.75}
+    .ok{color:#0a7f2e}
+    .warn{color:#b45f06}
+    .log{height:120px;overflow:auto;font-family:ui-monospace,Consolas,monospace;background:#fafafa}
+  </style>
+</head>
+<body>
+  <h1>Videollamada (API pura)</h1>
+  <p class="muted">Sin frontend aparte. Aquí solo se pega el <b>Bearer token</b> y el <b>código de sala</b>. Abre esta página en dos pestañas o 2 dispositivos con el mismo token+sala para probar.</p>
+
+  <div class="card">
+    <label>Bearer token</label>
+    <input id="token" placeholder="Pega tu JWT aquí (o genéralo en /auth/login)" />
+    <label>Código de sala</label>
+    <input id="room" placeholder="Ej: abc123" />
+    <div class="row" style="margin-top:12px">
+      <button id="btnCreate">Crear sala (requiere token)</button>
+      <button id="btnConnect">Conectar a la sala</button>
+    </div>
+    <div id="status" class="muted" style="margin-top:8px"></div>
+  </div>
+
+  <div class="row">
+    <div class="card">
+      <h3>Mi cámara</h3>
+      <video id="local" autoplay playsinline muted></video>
+      <div class="row" style="margin-top:8px">
+        <button id="btnStart">Iniciar cámara</button>
+        <button id="btnStop">Detener cámara</button>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Remoto</h3>
+      <video id="remote" autoplay playsinline></video>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Log</h3>
+    <pre id="log" class="log"></pre>
+  </div>
+
+  <script>
+    const log = (...a)=>{
+      const el = document.getElementById('log');
+      el.textContent += a.join(' ') + "\n";
+      el.scrollTop = el.scrollHeight;
+    };
+
+    const $ = (id)=> document.getElementById(id);
+    const API = location.origin; // same host
+
+    let ws, pc, localStream;
+
+    async function createRoom() {
+      const token = $('token').value.trim();
+      const res = await fetch(API + '/rooms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ title: 'Demo' })
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        log('Error crear sala:', t);
+        $('status').textContent = 'Error creando sala (ver log)';
+        return;
+      }
+      const data = await res.json();
+      $('room').value = data.code;
+      $('status').textContent = 'Sala creada: ' + data.code;
+      log('Sala creada:', JSON.stringify(data));
+    }
+
+    async function startCam() {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        $('local').srcObject = localStream;
+        $('status').textContent = 'Camara activa ✅';
+      } catch(e) {
+        log('getUserMedia error:', e);
+        $('status').textContent = 'No se pudo acceder a camara/micro.';
+      }
+    }
+    function stopCam() {
+      if (localStream) {
+        localStream.getTracks().forEach(t => t.stop());
+        $('local').srcObject = null;
+        $('status').textContent = 'Camara detenida';
+      }
+    }
+
+    async function connect() {
+      const token = $('token').value.trim();
+      const room = $('room').value.trim();
+      if (!token || !room) {
+        $('status').textContent = 'Falta token o sala';
+        return;
+      }
+      ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/${room}?token=${encodeURIComponent(token)}`);
+      ws.onopen = () => {
+        $('status').textContent = 'WS conectado ✔';
+        log('WS conectado');
+        setupPeer();
+      };
+      ws.onmessage = async (ev) => {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'peer-join') {
+          log('Otro peer se unio. Iniciando oferta...');
+          await makeOffer();
+        } else if (msg.type === 'offer') {
+          await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          ws.send(JSON.stringify({ type: 'answer', sdp: pc.localDescription }));
+          log('Respondimos con answer');
+        } else if (msg.type === 'answer') {
+          await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+          log('Recibimos answer');
+        } else if (msg.type === 'ice') {
+          try { await pc.addIceCandidate(msg.candidate); } catch(e){ log('ICE add error', e); }
+        } else if (msg.type === 'peer-leave') {
+          log('Peer salio');
+        }
+      };
+      ws.onclose = () => log('WS cerrado');
+    }
+
+    function setupPeer() {
+      pc = new RTCPeerConnection();
+      pc.onicecandidate = (ev) => {
+        if (ev.candidate && ws?.readyState === 1) {
+          ws.send(JSON.stringify({ type: 'ice', candidate: ev.candidate }));
+        }
+      };
+      pc.ontrack = (ev) => { $('remote').srcObject = ev.streams[0]; };
+      if (localStream) {
+        localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+      }
+    }
+
+    async function makeOffer() {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      ws.send(JSON.stringify({ type: 'offer', sdp: pc.localDescription }));
+      log('Enviamos offer');
+    }
+
+    $('btnCreate').onclick = createRoom;
+    $('btnStart').onclick = startCam;
+    $('btnStop').onclick = stopCam;
+    $('btnConnect').onclick = connect;
+  </script>
+</body>
+</html>

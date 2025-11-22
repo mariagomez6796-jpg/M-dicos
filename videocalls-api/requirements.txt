@@ -1,0 +1,11 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6     # incluye websockets/httptools/uvloop
+python-dotenv==1.0.1
+PyJWT==2.9.0
+passlib[bcrypt]==1.7.4
+
+sqlalchemy==2.0.36
+aiomysql==0.2.0
+greenlet>=3.0.3               # requerido por SQLAlchemy async
+cryptography>=42              # para auth caching_sha2_password de MySQL
+

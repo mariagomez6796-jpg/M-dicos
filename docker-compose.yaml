@@ -1,0 +1,111 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: crudg_db
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: CRUDG
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./appointments-api/table.sql:/docker-entrypoint-initdb.d/appointments.sql
+      - ./treatments-api/tables.sql:/docker-entrypoint-initdb.d/treatments.sql
+
+  backend:
+    build:
+      context: ./CRUDG        # �Y"' carpeta donde estǭ tu backend
+      dockerfile: Dockerfile   # �Y"" nombre exacto del Dockerfile
+    container_name: crudg_backend
+    restart: always
+    depends_on:
+      - mysql
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/CRUDG?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: root
+    ports:
+      - "8080:8080"
+
+  frontend:
+    build:
+      context: ./vitalapp-auth  # �Y"' carpeta donde estǭ tu frontend
+      dockerfile: Dockerfile    # �Y"" nombre exacto del Dockerfile del frontend
+    container_name: crudg_frontend
+    restart: always
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+      - api-citas
+    environment:
+      # --- ����LA CONFIGURACI�"N FINAL Y CORRECTA!! ---
+      # "use client" fuerza a que el NAVEGADOR haga las llamadas.
+      # El navegador S�? puede ver 'localhost:8080' y 'localhost:8001'.
+      NEXT_PUBLIC_API_URL: http://localhost:8080/api/v1
+      NEXT_PUBLIC_API_CITAS_URL: http://localhost:8001
+
+  api-citas:
+    build:
+      context: ./appointments-api # �Y"' carpeta donde estǭ la API de citas
+      dockerfile: Dockerfile      
+    container_name: appointments-api
+    restart: always    
+    # Le dice a Docker que inicie la API solo despuǸs de que la BD estǸ lista
+    depends_on:
+      - mysql      
+    # Comando para correr la API de citas DENTRO del contenedor
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]    
+    volumes:
+      - ./appointments-api:/app     
+    ports:     
+      - "8001:8000"     
+    # Variables de entorno para que la API de cita se conecte a la BD
+    environment:
+      DB_HOST: mysql           # �Y'^ Usa el nombre del servicio 'mysql', NO 'localhost'
+      DB_PORT: 3306            # �Y'^ Usa el puerto INTERNO de Docker (3306), NO 3307
+      DB_USER: root
+      DB_PASS: root
+      DB_NAME: CRUDG
+
+  videoapi:
+    build: ./videocalls-api
+    container_name: crudg_videoapi
+    restart: always
+    depends_on:
+      - mysql
+    environment:
+      # Mismo secreto JWT que el backend Java, para aceptar su token
+      JWT_SECRET: MiSuperClaveDeSeguridadParaVitalApp1234567890
+      # DB: usa el mismo MySQL y la misma base para simplificar (crea sus propias tablas)
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_NAME: CRUDG
+      DB_USER: root
+      DB_PASS: root
+    ports:
+      - "8000:8000"    
+
+  treatments-api:
+    container_name: treatments-api
+    restart: always
+    build:
+      context: ./treatments-api # <-- Carpeta nueva
+      dockerfile: Dockerfile
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    volumes:
+      - ./treatments-api:/app
+    ports:
+      - "8003:8000" # Acceso pǧblico: localhost:8003
+    depends_on:
+      - mysql
+    environment:
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: root
+      DB_PASS: root
+      DB_NAME: CRUDG
+
+volumes:
+  mysql-data:
